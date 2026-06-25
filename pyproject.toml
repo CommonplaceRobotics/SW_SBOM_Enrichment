@@ -1,0 +1,19 @@
+[project]
+name = "SBOM Enrichment Tool"
+dynamic = ["version", "dependencies"]
+description = "Helper tool for SBOM enrichment"
+readme = "README.md"
+requires-python = ">=3.9.2"
+authors = [
+    { name = "MAB", email = "support@cpr-robots.com" },
+]
+license = "MIT"
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.isort]
+profile = "black"
+
+[tool.black]
+line-length = 160
