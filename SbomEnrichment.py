@@ -4,7 +4,7 @@ import hashlib
 import os
 from pathlib import Path
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __author__ = "MAB"
 
 
@@ -48,12 +48,14 @@ class EnrichmentDataBaseComponent:
     """Licenses that can be used by a licensee"""
     effective_license = ""
     """License that is used by the creator of the SBOM"""
-    is_executable: bool
+    is_executable: bool | None = None
     """Set true to set the executable property (see BSI TR)"""
-    is_archive: bool
+    is_archive: bool | None = None
     """Set true to set the archive property (see BSI TR)"""
-    is_structured: bool
+    is_structured: bool | None = None
     """Set true to set the structured property (see BSI TR)"""
+    is_assembly: bool | None = None
+    """Is this component integrated into parent components (true) or is it an external dependency (false)?"""
 
     def ParseJSON(self, data: dict):
         if "bom-ref" in data:
@@ -84,6 +86,12 @@ class EnrichmentDataBaseComponent:
             self.is_archive = str(data["archive"]).lower() == "true"
         if "structured" in data:
             self.is_structured = str(data["structured"]).lower() == "true"
+
+        if "composition" in data:
+            if str(data["composition"]).lower() == "assembly":
+                self.is_assembly = True
+            if str(data["composition"]).lower() == "dependency":
+                self.is_assembly = False
 
     def __str__(self) -> str:
         d = dict()
@@ -128,6 +136,7 @@ class EnrichmentDataBaseComponent:
                                 or (filename == "lib" + dep_name + ".a")
                                 or (filename == "lib" + dep_name + ".so")
                                 or (filename == dep_name + ".lib")
+                                or (filename == dep_name + ".dll")
                                 or (filename == dep_name + ".exe")
                             ):
                                 return entry
@@ -155,17 +164,73 @@ class EnrichmentDataBaseComponent:
 
     def CalculateHash(self, cmake_build_dir: str):
         """Calculates the if the file name is given"""
-        if len(self.filenames) == 0:
-            return
-
         self.FindActualFileName()
 
         if len(self.filename_actual) > 0:
             (hash256, hash512) = HashFile(self.filename_actual)
             self.deployable_hash_sha256 = hash256
             self.deployable_hash_sha512 = hash512
-        else:
-            print("WARNING: Could not generate file hash for '" + self.bom_ref + "', file " + str(self.filenames) + " not found")
+        elif len(self.filenames) > 0:
+            print(
+                "WARNING: Could not generate file hash for '"
+                + self.bom_ref
+                + "', file "
+                + str(self.filenames)
+                + " not found"
+            )
+
+    def _SetStaticLinked(self):
+        if self.is_executable is None:
+            self.is_executable = True
+        if self.is_archive is None:
+            self.is_archive = False
+        if self.is_structured is None:
+            self.is_structured = False
+        if self.is_assembly is None:
+            self.is_assembly = True
+
+    def _SetDynamicLinked(self):
+        if self.is_executable is None:
+            self.is_executable = True
+        if self.is_archive is None:
+            self.is_archive = False
+        if self.is_structured is None:
+            self.is_structured = False
+        if self.is_assembly is None:
+            self.is_assembly = False
+
+    def _SetExecutable(self):
+        self._SetDynamicLinked()
+
+    def _SetDataArchive(self):
+        if self.is_executable is None:
+            self.is_executable = False
+        if self.is_archive is None:
+            self.is_archive = True
+        if self.is_structured is None:
+            self.is_structured = True
+        if self.is_assembly is None:
+            self.is_assembly = False
+
+    def AutoDetectAttributes(self):
+        """Tries to automatically detect attributes"""
+        self.FindActualFileName()
+
+        if len(self.filename_actual) > 0:
+            file_ext = Path(self.filename_actual).suffix
+            match file_ext:
+                case ".a":
+                    self._SetStaticLinked()
+                case ".lib":
+                    self._SetStaticLinked()
+                case ".so":
+                    self._SetDynamicLinked()
+                case ".dll":
+                    self._SetDynamicLinked()
+                case ".exe":
+                    self._SetExecutable()
+                case ".zip":
+                    self._SetDataArchive()
 
 
 class EnrichtmentDataBase:
@@ -191,7 +256,10 @@ class EnrichtmentDataBase:
                         # Debug printing the read data
                         # print(edbCompo.__str__())
 
-                if "remove-components" in enrichment_json and type(enrichment_json["remove-components"]) is list:
+                if (
+                    "remove-components" in enrichment_json
+                    and type(enrichment_json["remove-components"]) is list
+                ):
                     for component in enrichment_json["remove-components"]:
                         if type(component) is str and len(component) > 0:
                             self.remove_components.append(component)
@@ -200,6 +268,18 @@ class EnrichtmentDataBase:
         """Calculates the hashes for all given files"""
         for component in self.components:
             component.CalculateHash(cmake_build_dir)
+
+    def AutoDetectAttributes(self):
+        """Tries to automatically detect attributes"""
+        for component in self.components:
+            component.AutoDetectAttributes()
+
+    def GetComponent(self, bom_ref: str) -> EnrichmentDataBaseComponent | None:
+        """Gets a component from the data base. bom-refs are prefix-matched, the first found entry is returned"""
+        for c in self.components:
+            if bom_ref.startswith(c.bom_ref):
+                return c
+        return None
 
 
 def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
@@ -225,24 +305,34 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
 
             # Creator
             if len(enrich_component.creator) > 0:
-                print("Adding manufacturer contact to '" + enrich_component.bom_ref + "'...")
+                print(
+                    "Adding manufacturer contact to '"
+                    + enrich_component.bom_ref
+                    + "'..."
+                )
                 if "manufacturer" not in component:
                     component["manufacturer"] = dict()
                 if "@" in enrich_component.creator:
                     if "contact" not in component["manufacturer"]:
                         component["manufacturer"]["contact"] = list()
-                    component["manufacturer"]["contact"].append({"email": enrich_component.creator})
+                    component["manufacturer"]["contact"].append(
+                        {"email": enrich_component.creator}
+                    )
                 else:
                     component["manufacturer"]["url"] = [enrich_component.creator]
 
                 # sbomqs reads the manufacturer info from "supplier" instead of "manufacturer"
-                print("Adding supplier contact to '" + enrich_component.bom_ref + "'...")
+                print(
+                    "Adding supplier contact to '" + enrich_component.bom_ref + "'..."
+                )
                 if "supplier" not in component:
                     component["supplier"] = dict()
                 if "@" in enrich_component.creator:
                     if "contact" not in component["supplier"]:
                         component["supplier"]["contact"] = list()
-                    component["supplier"]["contact"].append({"email": enrich_component.creator})
+                    component["supplier"]["contact"].append(
+                        {"email": enrich_component.creator}
+                    )
                 else:
                     component["supplier"]["url"] = [enrich_component.creator]
 
@@ -261,7 +351,9 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                     component["licenses"].remove(rem)
 
                 # Add entry
-                component["licenses"].append({"license": {"id": license, "acknowledgement": "declared"}})
+                component["licenses"].append(
+                    {"license": {"id": license, "acknowledgement": "declared"}}
+                )
 
             # Distribution Licenses
             for license in enrich_component.distribution_licenses:
@@ -278,7 +370,9 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                     component["licenses"].remove(rem)
 
                 # Add entry
-                component["licenses"].append({"license": {"id": license, "acknowledgement": "concluded"}})
+                component["licenses"].append(
+                    {"license": {"id": license, "acknowledgement": "concluded"}}
+                )
 
             # Effective License
             if len(enrich_component.effective_license) > 0:
@@ -287,8 +381,15 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                     if "name" in p and p["name"] == "bsi:component:effectiveLicense":
                         has_effective_license = True
                 if not has_effective_license:
-                    print("Adding effective license to '" + enrich_component.bom_ref + "'...")
-                    licenseData = {"name": "bsi:component:effectiveLicense", "value": enrich_component.effective_license}
+                    print(
+                        "Adding effective license to '"
+                        + enrich_component.bom_ref
+                        + "'..."
+                    )
+                    licenseData = {
+                        "name": "bsi:component:effectiveLicense",
+                        "value": enrich_component.effective_license,
+                    }
                     component["properties"].append(licenseData)
 
             # Filename of the component
@@ -299,17 +400,42 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                     if "name" in p and p["name"] == "bsi:component:filename":
                         has_filename = True
                 if not has_filename:
-                    print("Adding filename '" + enrich_component.filename_actual + "' to '" + enrich_component.bom_ref + "'...")
+                    print(
+                        "Adding filename '"
+                        + enrich_component.filename_actual
+                        + "' to '"
+                        + enrich_component.bom_ref
+                        + "'..."
+                    )
                     filenameData = {"name": "bsi:component:filename", "value": filename}
                     component["properties"].append(filenameData)
 
             # Hash value of the deployable component
-            if len(enrich_component.deployable_hash_sha512) > 0 and len(enrich_component.filename_actual) > 0:
-                print("Adding deployable hash of file '" + enrich_component.filename_actual + "' to '" + enrich_component.bom_ref + "'...")
+            if (
+                len(enrich_component.deployable_hash_sha512) > 0
+                and len(enrich_component.filename_actual) > 0
+            ):
+                print(
+                    "Adding deployable hash of file '"
+                    + enrich_component.filename_actual
+                    + "' to '"
+                    + enrich_component.bom_ref
+                    + "'..."
+                )
                 uri = "file://" + enrich_component.filename_actual
-                hashData_sha256 = {"alg": "SHA-256", "content": enrich_component.deployable_hash_sha256}
-                hashData_sha512 = {"alg": "SHA-512", "content": enrich_component.deployable_hash_sha512}
-                hashData = {"url": uri, "type": "distribution", "hashes": [hashData_sha256, hashData_sha512]}
+                hashData_sha256 = {
+                    "alg": "SHA-256",
+                    "content": enrich_component.deployable_hash_sha256,
+                }
+                hashData_sha512 = {
+                    "alg": "SHA-512",
+                    "content": enrich_component.deployable_hash_sha512,
+                }
+                hashData = {
+                    "url": uri,
+                    "type": "distribution",
+                    "hashes": [hashData_sha256, hashData_sha512],
+                }
                 component["externalReferences"].append(hashData)
 
                 # Clear / init hashes list - wrong place according to the BSI but sbomqs expects it here and in SHA-256 format
@@ -319,11 +445,17 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
 
             # Set executable property
             try:
-                print("Setting '" + enrich_component.bom_ref + "' executable property...")
+                print(
+                    "Setting '" + enrich_component.bom_ref + "' executable property..."
+                )
                 if enrich_component.is_executable is True:
-                    component["properties"].append({"name": "bsi:component:executable", "value": "executable"})
+                    component["properties"].append(
+                        {"name": "bsi:component:executable", "value": "executable"}
+                    )
                 else:
-                    component["properties"].append({"name": "bsi:component:executable", "value": "non-executable"})
+                    component["properties"].append(
+                        {"name": "bsi:component:executable", "value": "non-executable"}
+                    )
             except AttributeError:
                 pass
 
@@ -331,19 +463,29 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
             try:
                 print("Setting '" + enrich_component.bom_ref + "' archive property...")
                 if enrich_component.is_archive is True:
-                    component["properties"].append({"name": "bsi:component:archive", "value": "archive"})
+                    component["properties"].append(
+                        {"name": "bsi:component:archive", "value": "archive"}
+                    )
                 else:
-                    component["properties"].append({"name": "bsi:component:archive", "value": "no archive"})
+                    component["properties"].append(
+                        {"name": "bsi:component:archive", "value": "no archive"}
+                    )
             except AttributeError:
                 pass
 
             # Set structured property
             try:
-                print("Setting '" + enrich_component.bom_ref + "' structured property...")
+                print(
+                    "Setting '" + enrich_component.bom_ref + "' structured property..."
+                )
                 if enrich_component.is_structured is True:
-                    component["properties"].append({"name": "bsi:component:structured", "value": "structured"})
+                    component["properties"].append(
+                        {"name": "bsi:component:structured", "value": "structured"}
+                    )
                 else:
-                    component["properties"].append({"name": "bsi:component:structured", "value": "unstructured"})
+                    component["properties"].append(
+                        {"name": "bsi:component:structured", "value": "unstructured"}
+                    )
             except AttributeError:
                 pass
 
@@ -356,17 +498,37 @@ def FindBomRefsForPURL(edb: EnrichtmentDataBase, sbom_json: dict):
     for edbcomp in edb.components:
         if len(edbcomp.bom_ref) == 0:
             for component in sbom_json["components"]:
-                if "bom-ref" in component and "purl" in component and component["purl"].startswith(edbcomp.purl):
+                if (
+                    "bom-ref" in component
+                    and "purl" in component
+                    and component["purl"].startswith(edbcomp.purl)
+                ):
                     edbcomp.bom_ref = component["bom-ref"]
-                    print("Found bom-ref '" + edbcomp.bom_ref + "' for purl '" + edbcomp.purl + "'")
+                    print(
+                        "Found bom-ref '"
+                        + edbcomp.bom_ref
+                        + "' for purl '"
+                        + edbcomp.purl
+                        + "'"
+                    )
                     break
 
         if len(edbcomp.bom_ref) == 0:
             if "metadata" in sbom_json and "component" in sbom_json["metadata"]:
                 component = sbom_json["metadata"]["component"]
-                if "bom-ref" in component and "purl" in component and component["purl"].startswith(edbcomp.purl):
+                if (
+                    "bom-ref" in component
+                    and "purl" in component
+                    and component["purl"].startswith(edbcomp.purl)
+                ):
                     edbcomp.bom_ref = component["bom-ref"]
-                    print("Found bom-ref '" + edbcomp.bom_ref + "' for purl '" + edbcomp.purl + "'")
+                    print(
+                        "Found bom-ref '"
+                        + edbcomp.bom_ref
+                        + "' for purl '"
+                        + edbcomp.purl
+                        + "'"
+                    )
 
 
 cmake_build_dir = ""
@@ -378,7 +540,9 @@ sbom_file_in = ""
 sbom_file_out = ""
 """The SBOM output file, must be in CycloneDX JSON format"""
 
-argparser = argparse.ArgumentParser(description="Commonplace Robotics GmbH SBOM enrichment tool v" + __version__)
+argparser = argparse.ArgumentParser(
+    description="Commonplace Robotics GmbH SBOM enrichment tool v" + __version__
+)
 argparser.add_argument("enrichtment_file", type=str, help="Enrichment data file")
 argparser.add_argument("sbom_in", type=str, help="SBOM input file")
 argparser.add_argument("-o", "--out", type=str, help="SBOM output file")
@@ -433,6 +597,7 @@ with open(sbom_file_in, encoding="utf-8") as f:
 FindBomRefsForPURL(edb, sbom_json)
 
 edb.CalculateHashes(cmake_build_dir)
+edb.AutoDetectAttributes()
 
 # Remove components (including components that are no longer needed)
 remove_components = edb.remove_components
@@ -476,7 +641,13 @@ while len(remove_components) > 0:
         for dep in sbom_json["dependencies"]:
             # Remove from dependencies of other components
             if "dependsOn" in dep and bom_ref in dep["dependsOn"]:
-                print("Removing dependency to '" + bom_ref + "' from '" + dep["ref"] + "'...")
+                print(
+                    "Removing dependency to '"
+                    + bom_ref
+                    + "' from '"
+                    + dep["ref"]
+                    + "'..."
+                )
                 dep["dependsOn"].remove(bom_ref)
 
 # Enrich components
@@ -488,6 +659,37 @@ if "metadata" in sbom_json and "component" in sbom_json["metadata"]:
     component = sbom_json["metadata"]["component"]
     EnrichComponent(edb, component)
 
+# Enrich compositions - describes the completeness of dependencies
+main_component_ref = sbom_json["metadata"]["component"]["bom-ref"]
+sbom_json["compositions"] = list()
+# All components are in the dependencies list, create composition entries for each
+print("Adding compositions...")
+for c in sbom_json["dependencies"]:
+    # According to BSI the composition must either contain composition XOR assembly
+    assemblies = {"ref": c["ref"], "aggregate": "unknown", "assemblies": []}
+    dependencies = {"ref": c["ref"], "aggregate": "unknown", "dependencies": []}
+    if c["ref"] == main_component_ref:
+        # Implicitly mark the main componente complete, since we must describe all direct dependencies according to BSI
+        assemblies["aggregate"] = "complete"
+        dependencies["aggregate"] = "complete"
+
+    # Add its dependencies to either assembly or dependency
+    if "dependsOn" in c:
+        for dep in c["dependsOn"]:
+            is_assembly = False
+            component = edb.GetComponent(dep)
+            if component is not None and component.is_assembly is not None:
+                is_assembly = component.is_assembly
+            if is_assembly:
+                assemblies["assemblies"].append(dep)
+            else:
+                dependencies["dependencies"].append(dep)
+
+    sbom_json["compositions"].append(assemblies)
+    sbom_json["compositions"].append(dependencies)
+
+
+# Export result
 print("Writing SBOM to " + sbom_file_out)
 with open(sbom_file_out, "w", encoding="utf-8") as f:
     f.write(json.dumps(sbom_json, indent=2))
