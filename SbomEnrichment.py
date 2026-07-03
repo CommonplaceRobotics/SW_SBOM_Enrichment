@@ -2,9 +2,12 @@ import argparse
 import json
 import hashlib
 import os
+import requests
+import urllib.request
 from pathlib import Path
+from license_expression import get_spdx_licensing, ExpressionError
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __author__ = "MAB"
 
 
@@ -142,6 +145,51 @@ class EnrichmentDataBaseComponent:
                                 return entry
         return ""
 
+    def GetHashFromPip(self):
+        """Tries to get the file hash from Python pip. This expects that the filename_actual is set to the wheel file name"""
+        try:
+            if len(self.purl) > 0 and str(self.purl).startswith("pkg:pypi/"):
+                package_name = str(self.purl).split("/")[1].split("@")[0]
+                if len(self.filename_actual) > 0 and self.filename_actual.endswith(
+                    ".whl"
+                ):
+                    package = requests.get(
+                        f"https://pypi.org/pypi/{package_name}/json"
+                    ).json()
+                    for releases in package["releases"].values():
+                        for r in releases:
+                            if (
+                                "filename" in r
+                                and r["filename"] == self.filename_actual
+                                and "url" in r
+                                and len(r["url"]) > 0
+                            ):
+                                url = r["url"]
+                                tmpfn = "temporary"
+                                print(
+                                    "Downloading file '"
+                                    + url
+                                    + "' as '"
+                                    + tmpfn
+                                    + "' for '"
+                                    + self.bom_ref
+                                    + "' for hashing..."
+                                )
+                                urllib.request.urlretrieve(url, tmpfn)
+                                (hash256, hash512) = HashFile(tmpfn)
+                                self.deployable_hash_sha256 = hash256
+                                self.deployable_hash_sha512 = hash512
+                                print("Deleting file '" + tmpfn + "'...")
+                                os.remove(tmpfn)
+                                return
+        except Exception as e:
+            print(
+                "ERROR: Could not get hash from pip for '"
+                + self.bom_ref
+                + "': "
+                + str(e)
+            )
+
     def FindActualFileName(self):
         """Tries to find the actual file name"""
         if len(self.filename_actual) > 0:
@@ -231,6 +279,10 @@ class EnrichmentDataBaseComponent:
                     self._SetExecutable()
                 case ".zip":
                     self._SetDataArchive()
+                case ".gz":
+                    self._SetDataArchive()
+                case ".bz2":
+                    self._SetDataArchive()
 
 
 class EnrichtmentDataBase:
@@ -282,6 +334,16 @@ class EnrichtmentDataBase:
         return None
 
 
+def IsKnownLicense(id: str) -> bool:
+    """Checks whether the license is a known SPDX license"""
+    licensing = get_spdx_licensing()
+    try:
+        licensing.parse(id, validate=True)
+    except ExpressionError:
+        return False
+    return True
+
+
 def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
     """
     Enriches a SBOM component
@@ -293,6 +355,10 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
         bom_ref = component["bom-ref"]
         if len(enrich_component.bom_ref) == 0:
             continue
+
+        # Fill missing info from SBOM
+        if len(enrich_component.purl) == 0 and "purl" in component:
+            enrich_component.purl = component["purl"]
 
         if bom_ref.startswith(enrich_component.bom_ref):
             # Create structure
@@ -336,51 +402,119 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                 else:
                     component["supplier"]["url"] = [enrich_component.creator]
 
+            # Licensing
             # Original Licenses
-            for license in enrich_component.original_licenses:
-                # Remove colliding entries
-                to_remove = []
+            # Collect original licenses
+            original_licenses = enrich_component.original_licenses
+            if len(original_licenses) == 0:
+                original_licenses = []
+                # If none are defined try to read the licenses from the SBOM
                 for li in component["licenses"]:
-                    # Remove other declared licenses
-                    if "acknowledgement" in li and li["acknowledgement"] == "declared":
-                        to_remove.append(li)
-                    # Remove standard licenses in "name" property
-                    elif "name" in li and li["name"] == license:
-                        to_remove.append(li)
-                for rem in to_remove:
-                    component["licenses"].remove(rem)
+                    if "id" in li:
+                        original_licenses.append(li["id"])
+                    elif "name" in li:
+                        original_licenses.append(li["name"])
+                    elif "expression" in li:
+                        original_licenses.append(li["expression"])
 
-                # Add entry
-                component["licenses"].append(
-                    {"license": {"id": license, "acknowledgement": "declared"}}
-                )
+            # Add original licenses
+            for license in original_licenses:
+                # If the license already is in the list: update the entry
+                found = False
+                for li in component["licenses"]:
+                    if (
+                        ("name" in li and li["name"] == license)
+                        or ("id" in li and li["id"] == license)
+                        or "expression" in li
+                        and li["expression"] == license
+                    ):
+                        if (
+                            "acknowledgement" not in li
+                            or li["acknowledgement"] == "declared"
+                        ):
+                            li["acknowledgement"] = "declared"
+                            found = True
+
+                if not found:
+                    # Add new entry
+                    if IsKnownLicense(license):
+                        component["licenses"].append(
+                            # {"license": {"id": license, "acknowledgement": "declared"}}
+                            {
+                                "id": license,
+                                "expression": license,
+                                "acknowledgement": "declared",
+                            }
+                        )
+                    else:
+                        component["licenses"].append(
+                            # {"license": {"name": license, "acknowledgement": "declared"}}
+                            {
+                                "name": license,
+                                "expression": license,
+                                "acknowledgement": "declared",
+                            }
+                        )
 
             # Distribution Licenses
-            for license in enrich_component.distribution_licenses:
-                # Remove colliding entries
-                to_remove = []
-                for li in component["licenses"]:
-                    # Remove other concluded licenses
-                    if "acknowledgement" in li and li["acknowledgement"] == "concluded":
-                        to_remove.append(li)
-                    # Remove standard licenses in "name" property
-                    elif "name" in li and li["name"] == license:
-                        to_remove.append(li)
-                for rem in to_remove:
-                    component["licenses"].remove(rem)
+            # Collect distribution licenses
+            distribution_licenses = enrich_component.distribution_licenses
+            if len(distribution_licenses) == 0:
+                # Fallback
+                distribution_licenses = original_licenses
 
-                # Add entry
-                component["licenses"].append(
-                    {"license": {"id": license, "acknowledgement": "concluded"}}
-                )
+            # Add distribution licenses
+            for license in distribution_licenses:
+                # If the license already is in the list: update the entry
+                found = False
+                for li in component["licenses"]:
+                    if (
+                        ("name" in li and li["name"] == license)
+                        or ("id" in li and li["id"] == license)
+                        or ("expression" in li and li["expression"] == license)
+                    ):
+                        if (
+                            "acknowledgement" not in li
+                            or li["acknowledgement"] == "concluded"
+                        ):
+                            li["acknowledgement"] = "concluded"
+                            found = True
+
+                if not found:
+                    # Add new entry
+                    if IsKnownLicense(license):
+                        component["licenses"].append(
+                            # {"license": {"id": license, "acknowledgement": "concluded"}}
+                            {
+                                "id": license,
+                                "expression": license,
+                                "acknowledgement": "concluded",
+                            }
+                        )
+                    else:
+                        component["licenses"].append(
+                            # {"license": {"name": license, "acknowledgement": "concluded"}}
+                            {
+                                "name": license,
+                                "expression": license,
+                                "acknowledgement": "concluded",
+                            }
+                        )
 
             # Effective License
-            if len(enrich_component.effective_license) > 0:
-                has_effective_license = False
-                for p in component["properties"]:
-                    if "name" in p and p["name"] == "bsi:component:effectiveLicense":
-                        has_effective_license = True
-                if not has_effective_license:
+            # Do not overwrite existing entry
+            has_effective_license = False
+            for p in component["properties"]:
+                if "name" in p and p["name"] == "bsi:component:effectiveLicense":
+                    has_effective_license = True
+
+            if not has_effective_license:
+                effective_license = enrich_component.effective_license
+                if len(effective_license) == 0:
+                    # Fallback
+                    effective_license = distribution_licenses[0]
+
+                if len(effective_license) > 0:
                     print(
                         "Adding effective license to '"
                         + enrich_component.bom_ref
@@ -388,7 +522,7 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                     )
                     licenseData = {
                         "name": "bsi:component:effectiveLicense",
-                        "value": enrich_component.effective_license,
+                        "value": effective_license,
                     }
                     component["properties"].append(licenseData)
 
@@ -409,6 +543,26 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                     )
                     filenameData = {"name": "bsi:component:filename", "value": filename}
                     component["properties"].append(filenameData)
+            else:
+                # Get filename from SBOM
+                for p in component["properties"]:
+                    if "name" in p and p["name"] == "bsi:component:filename":
+                        enrich_component.filename_actual = p["value"]
+                        print(
+                            "Found filename for '"
+                            + enrich_component.bom_ref
+                            + "' in SBOM: '"
+                            + enrich_component.filename_actual
+                            + "'"
+                        )
+                        break
+
+            # For Python projects: Try to get the hash for the wheel file
+            if (
+                len(enrich_component.filename_actual) > 0
+                and len(enrich_component.deployable_hash_sha512) == 0
+            ):
+                enrich_component.GetHashFromPip()
 
             # Hash value of the deployable component
             if (
@@ -531,6 +685,86 @@ def FindBomRefsForPURL(edb: EnrichtmentDataBase, sbom_json: dict):
                     )
 
 
+def RemoveComponents(components: list):
+    """
+    Removes the given components from the SBOM
+    Parameters:
+        components: List of bom-ref prefixes
+    """
+    for bom_ref_prefix in components:
+        bom_ref = ""
+
+        for component in sbom_json["components"]:
+            if component["bom-ref"].startswith(bom_ref_prefix):
+                # Get bom-ref from components list
+                bom_ref = component["bom-ref"]
+
+                # Remove from components list
+                print("Removing component '" + bom_ref + "'...")
+                sbom_json["components"].remove(component)
+
+        if len(bom_ref) > 0:
+            for dep in sbom_json["dependencies"]:
+                # Own entry
+                if dep["ref"] == bom_ref:
+                    # Remove own dependencies entry
+                    print("Removing dependencies of '" + bom_ref + "'...")
+                    sbom_json["dependencies"].remove(dep)
+
+            # Other dependency entries
+            for dep in sbom_json["dependencies"]:
+                # Remove from dependencies of other components
+                if "dependsOn" in dep and bom_ref in dep["dependsOn"]:
+                    print(
+                        "Removing dependency to '"
+                        + bom_ref
+                        + "' from '"
+                        + dep["ref"]
+                        + "'..."
+                    )
+                    dep["dependsOn"].remove(bom_ref)
+
+        else:
+            print(
+                "WARNING: Could not remove component, bom-ref prefix '"
+                + bom_ref_prefix
+                + "' not found"
+            )
+
+
+def RemoveOrphans(sbom_json: dict):
+    """Removes all orphan components"""
+    orphans = []
+    while True:
+        # First add all components...
+        for c in sbom_json["components"]:
+            orphans.append(c["bom-ref"])
+        # ...then remove all that are depended on from the list
+        for d in sbom_json["dependencies"]:
+            if "dependsOn" in d:
+                for do in d["dependsOn"]:
+                    if do in orphans:
+                        orphans.remove(do)
+        # also remove the main component
+        main_component = sbom_json["metadata"]["component"]["bom-ref"]
+        if main_component in orphans:
+            orphans.remove(main_component)
+
+        # Remove orphans
+        if len(orphans) > 0:
+            print("Removing orphan components: " + str(orphans))
+            RemoveComponents(orphans)
+        else:
+            break
+
+        orphans = []
+
+
+###############################################################################
+# Script execution start
+###############################################################################
+
+
 cmake_build_dir = ""
 """Name of the CMake build directory, may be empty"""
 enrichment_file = ""
@@ -560,6 +794,9 @@ if type(args.out) is str:
 if type(args.cmake_dir) is str:
     cmake_build_dir = args.cmake_dir
 
+###############################################################################
+# Validate arguments
+###############################################################################
 if len(cmake_build_dir) > 0 and not Path(cmake_build_dir).exists():
     print("Error: CMake build directory given but it does not exist")
     exit(-1)
@@ -584,73 +821,40 @@ if not Path(sbom_file_in).exists():
     print("Error: SBOM input file '" + sbom_file_in + "' does not exist")
     exit(-1)
 
+###############################################################################
 # Read enrichment file
+###############################################################################
 edb = EnrichtmentDataBase()
 edb.ReadFromFile(enrichment_file)
 
+###############################################################################
 # Read SBOM
+###############################################################################
 print("Reading SBOM from " + sbom_file_in)
 with open(sbom_file_in, encoding="utf-8") as f:
     sbom_json = json.load(f)
 
+###############################################################################
 # Get bom-refs from PURL
+###############################################################################
 FindBomRefsForPURL(edb, sbom_json)
 
 edb.CalculateHashes(cmake_build_dir)
 edb.AutoDetectAttributes()
 
-# Remove components (including components that are no longer needed)
-remove_components = edb.remove_components
-while len(remove_components) > 0:
-    rem_component = remove_components.pop()
-    bom_ref = ""
+###############################################################################
+# Remove components that are marked for removal in the enrichment data base
+###############################################################################
+RemoveComponents(edb.remove_components)
 
-    for component in sbom_json["components"]:
-        if component["bom-ref"].startswith(rem_component):
-            # Get bom-ref from components list
-            bom_ref = component["bom-ref"]
+###############################################################################
+# Find orphan components and also remove them
+###############################################################################
+RemoveOrphans(sbom_json)
 
-            # Remove from components list
-            print("Removing component '" + bom_ref + "'...")
-            sbom_json["components"].remove(component)
-
-    if len(bom_ref) > 0:
-        for dep in sbom_json["dependencies"]:
-            # Own entry
-            if dep["ref"] == bom_ref:
-                # Check if own dependencies are still needed, if not add them to the remove list
-                if "dependsOn" in dep:
-                    # for each own dependency
-                    for own_dependency in dep["dependsOn"]:
-                        # check if it is in any other component's dependency list
-                        needed = False
-                        for other_compo in sbom_json["dependencies"]:
-                            if "dependsOn" in other_compo:
-                                if own_dependency in other_compo["dependsOn"]:
-                                    needed = True
-                                    break
-                        if not needed:
-                            print("Marking '" + own_dependency + "' for removal")
-                            remove_components.append(own_dependency)
-
-                # Remove own dependencies entry
-                print("Removing dependencies of '" + bom_ref + "'...")
-                sbom_json["dependencies"].remove(dep)
-
-        # Other dependency entries
-        for dep in sbom_json["dependencies"]:
-            # Remove from dependencies of other components
-            if "dependsOn" in dep and bom_ref in dep["dependsOn"]:
-                print(
-                    "Removing dependency to '"
-                    + bom_ref
-                    + "' from '"
-                    + dep["ref"]
-                    + "'..."
-                )
-                dep["dependsOn"].remove(bom_ref)
-
+###############################################################################
 # Enrich components
+###############################################################################
 for component in sbom_json["components"]:
     EnrichComponent(edb, component)
 
@@ -659,7 +863,9 @@ if "metadata" in sbom_json and "component" in sbom_json["metadata"]:
     component = sbom_json["metadata"]["component"]
     EnrichComponent(edb, component)
 
+###############################################################################
 # Enrich compositions - describes the completeness of dependencies
+###############################################################################
 main_component_ref = sbom_json["metadata"]["component"]["bom-ref"]
 sbom_json["compositions"] = list()
 # All components are in the dependencies list, create composition entries for each
@@ -688,8 +894,9 @@ for c in sbom_json["dependencies"]:
     sbom_json["compositions"].append(assemblies)
     sbom_json["compositions"].append(dependencies)
 
-
+###############################################################################
 # Export result
+###############################################################################
 print("Writing SBOM to " + sbom_file_out)
 with open(sbom_file_out, "w", encoding="utf-8") as f:
     f.write(json.dumps(sbom_json, indent=2))

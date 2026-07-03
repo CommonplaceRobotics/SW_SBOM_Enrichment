@@ -1,6 +1,6 @@
 [project]
 name = "sbom_enrichment"
-version = "0.3.0"
+version = "0.4.0"
 description = "Helper tool for SBOM enrichment"
 authors = [
     {name = "MAB",email = "support@commonplacerobotics.de"}
@@ -8,6 +8,10 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.9.2"
 license = "MIT"
+
+dependencies = [
+	"license-expression (>= 30.4)",
+]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
