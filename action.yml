@@ -1,0 +1,58 @@
+name: 'SBOM enrichment'
+description: 'Adds information to SBOM components and removes unused dependencies'
+
+inputs:
+  database:
+    description: 'JSON based enrichment data base'
+    required: true
+    default: 'enrichment_database.json'
+  sbom:
+    description: 'Input SBOM in CycloneDX JSON format, will be overwritten unless sbom_out is set'
+    required: true
+    default: 'sbom.cdx.json'
+  sbom_out:
+    description: 'The updated SBOM will be written here'
+    required: false
+    default: ''
+  cmake_build_dir:
+    description: 'The CMake build directory'
+    required: false
+    default: ''
+
+runs:
+  using: "composite"
+  steps:
+    - name: Get the SBOM enrichment tool
+      uses: actions/checkout@v7
+      with:
+        repository: CommonplaceRobotics/SW_SBOM_Enrichment
+        path: ${{ github.workspace }}/sbom_tool
+
+    - name: Install poetry
+      shell: bash
+      run: |
+        pip install poetry
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        cd ${{ github.workspace }}/sbom_tool
+        poetry install --no-root
+
+    - name: Enrich SBOM
+      shell: bash
+      run: |
+        chmod +x ${{ github.workspace }}/sbom_tool/SbomEnrichment.py
+        if [ "${{ inputs.sbom_out }}" == "" ]; then
+            if [ "${{ inputs.cmake_build_dir }}" == "" ]; then
+                poetry --project=${{ github.workspace }}/sbom_tool run python3 ${{ github.workspace }}/sbom_tool/SbomEnrichment.py ${{ inputs.database }} ${{ inputs.sbom }}
+            else
+                poetry --project=${{ github.workspace }}/sbom_tool run python3 ${{ github.workspace }}/sbom_tool/SbomEnrichment.py ${{ inputs.database }} ${{ inputs.sbom }} -c ${{ inputs.cmake_build_dir }}
+            fi
+        else
+            if [ "${{ inputs.cmake_build_dir }}" == "" ]; then
+                poetry --project=${{ github.workspace }}/sbom_tool run python3 ${{ github.workspace }}/sbom_tool/SbomEnrichment.py ${{ inputs.database }} ${{ inputs.sbom }} -o ${{ inputs.sbom_out }}
+            else
+                poetry --project=${{ github.workspace }}/sbom_tool run python3 ${{ github.workspace }}/sbom_tool/SbomEnrichment.py ${{ inputs.database }} ${{ inputs.sbom }} -o ${{ inputs.sbom_out }} -c ${{ inputs.cmake_build_dir }}
+            fi
+        fi

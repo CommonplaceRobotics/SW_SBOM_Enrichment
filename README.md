@@ -6,6 +6,7 @@ Hinweis: Dieses Repository ist öffentlich um die Integration in unsere CI zu ve
 
 ## Verwendung
 
+### Manueller Aufruf
 Der Ablauf der SBOM-Generierung sieht damit so aus:
 1. SBOM erzeugen
 2. SBOM automatisiert erweitern (Enrichment + Augmentation, z.B. via sbomify)
@@ -32,6 +33,25 @@ Parameter:
 2. ```sbom_in```: Eingabe-SBOM-Datei
 3. ```out```: Ausgabe-SBOM-Datei, falls nicht angegeben wird die Eingabedatei überschrieben
 4. ```cmake_dir```: Pfad zum CMake-Build-Verzeichnis
+
+### Github-Actions
+Das Skript kann auch als Github-Action aufgerufen werden. Anforderung dazu ist, dass Python 3 installiert ist.
+
+```yaml
+- name: Final SBOM enrichment
+  uses: CommonplaceRobotics/SW_SBOM_Enrichment@v1
+  with:
+	database: .github/workflows/sbom_enrichment_db.json
+	sbom: sbom.cdx.json
+	sbom_out: sbom_out.cdx.json
+	cmake_build_dir: out/build/Linux/armv8_32/Release
+```
+
+Parameter:
+* database: Enrichment-Datenbank
+* sbom: SBOM-Eingabedatei, wird überschrieben, falls sbom_out nicht gesetzt ist
+* sbom_out: SBOM-Ausgabedatei (optional)
+* cmake_dir: CMake-Build-Verzeichnis (optional)
 
 ## Enrichment-Datei
 Die Enrichment-Datei ist eine JSON-Datei mit einer eigenen Struktur. Für jede in der SBOM angegebenen Komponente wird geprüft ob diese in der Enrichment-Datei enthalten ist und ggf. mit den dort angegebenen Informationen erweitert.

@@ -10,7 +10,9 @@ requires-python = ">=3.9.2"
 license = "MIT"
 
 dependencies = [
-	"license-expression (>= 30.4)",
+	"requests (>= 2.0)",
+	"pathlib (>= 1.0)",
+	"license-expression (>= 30.4)"
 ]
 
 [build-system]

@@ -897,6 +897,9 @@ for c in sbom_json["dependencies"]:
 ###############################################################################
 # Export result
 ###############################################################################
-print("Writing SBOM to " + sbom_file_out)
+print("Writing SBOM to " + sbom_file_out + "...")
 with open(sbom_file_out, "w", encoding="utf-8") as f:
     f.write(json.dumps(sbom_json, indent=2))
+
+print("SBOM enrichment done.")
+exit(0)
