@@ -7,7 +7,7 @@ import urllib.request
 from pathlib import Path
 from license_expression import get_spdx_licensing, ExpressionError
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 __author__ = "MAB"
 
 
@@ -650,7 +650,7 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
 def FindBomRefsForPURL(edb: EnrichtmentDataBase, sbom_json: dict):
     """Gets the bom-refs via the PURL if the bom-ref is not defined in the enrichment file"""
     for edbcomp in edb.components:
-        if len(edbcomp.bom_ref) == 0:
+        if len(edbcomp.bom_ref) == 0 and "components" in sbom_json:
             for component in sbom_json["components"]:
                 if (
                     "bom-ref" in component
@@ -691,6 +691,10 @@ def RemoveComponents(components: list):
     Parameters:
         components: List of bom-ref prefixes
     """
+    if "components" not in sbom_json:
+        print("WARNING: No components in SBOM!")
+        return
+
     for bom_ref_prefix in components:
         bom_ref = ""
 
@@ -734,6 +738,10 @@ def RemoveComponents(components: list):
 
 def RemoveOrphans(sbom_json: dict):
     """Removes all orphan components"""
+    if "components" not in sbom_json:
+        print("WARNING: No components in SBOM!")
+        return
+
     orphans = []
     while True:
         # First add all components...
@@ -855,8 +863,9 @@ RemoveOrphans(sbom_json)
 ###############################################################################
 # Enrich components
 ###############################################################################
-for component in sbom_json["components"]:
-    EnrichComponent(edb, component)
+if "components" in sbom_json:
+    for component in sbom_json["components"]:
+        EnrichComponent(edb, component)
 
 # Enrich target component
 if "metadata" in sbom_json and "component" in sbom_json["metadata"]:
