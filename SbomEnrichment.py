@@ -149,6 +149,7 @@ class EnrichmentDataBaseComponent:
         """Tries to get the file hash from Python pip. This expects that the filename_actual is set to the wheel file name"""
         try:
             if len(self.purl) > 0 and str(self.purl).startswith("pkg:pypi/"):
+                print("\tGetting hash from pip package for '" + self.purl + "'...")
                 package_name = str(self.purl).split("/")[1].split("@")[0]
                 if len(self.filename_actual) > 0 and self.filename_actual.endswith(
                     ".whl"
@@ -167,7 +168,7 @@ class EnrichmentDataBaseComponent:
                                 url = r["url"]
                                 tmpfn = "temporary"
                                 print(
-                                    "Downloading file '"
+                                    "\tDownloading file '"
                                     + url
                                     + "' as '"
                                     + tmpfn
@@ -294,7 +295,7 @@ class EnrichtmentDataBase:
     """List of components to remove"""
 
     def ReadFromFile(self, filename: str):
-        print("Reading enrichment database from " + filename)
+        print("Reading enrichment database from '" + filename + "'...")
         with open(filename, encoding="utf-8") as f:
             enrichment_json = json.load(f)
             if "components" in enrichment_json and type(enrichment_json) is dict:
@@ -318,11 +319,13 @@ class EnrichtmentDataBase:
 
     def CalculateHashes(self, cmake_build_dir: str):
         """Calculates the hashes for all given files"""
+        print("Calculating hashes...")
         for component in self.components:
             component.CalculateHash(cmake_build_dir)
 
     def AutoDetectAttributes(self):
         """Tries to automatically detect attributes"""
+        print("Detecting attributes...")
         for component in self.components:
             component.AutoDetectAttributes()
 
@@ -351,8 +354,9 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
         edb: Enrichment data base
         component: SBOM component object
     """
+    bom_ref = component["bom-ref"]
+
     for enrich_component in edb.components:
-        bom_ref = component["bom-ref"]
         if len(enrich_component.bom_ref) == 0:
             continue
 
@@ -361,6 +365,8 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
             enrich_component.purl = component["purl"]
 
         if bom_ref.startswith(enrich_component.bom_ref):
+            print("Enriching component '" + bom_ref + "'...")
+
             # Create structure
             if "properties" not in component:
                 component["properties"] = list()
@@ -368,12 +374,16 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                 component["externalReferences"] = list()
             if "licenses" not in component:
                 component["licenses"] = list()
+            if "properties" not in component:
+                component["properties"] = list()
 
             # Creator
             if len(enrich_component.creator) > 0:
                 print(
-                    "Adding manufacturer contact to '"
+                    "\tAdding manufacturer contact to '"
                     + enrich_component.bom_ref
+                    + "': '"
+                    + enrich_component.creator
                     + "'..."
                 )
                 if "manufacturer" not in component:
@@ -389,7 +399,11 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
 
                 # sbomqs reads the manufacturer info from "supplier" instead of "manufacturer"
                 print(
-                    "Adding supplier contact to '" + enrich_component.bom_ref + "'..."
+                    "\tAdding supplier contact to '"
+                    + enrich_component.bom_ref
+                    + "': '"
+                    + enrich_component.creator
+                    + "'..."
                 )
                 if "supplier" not in component:
                     component["supplier"] = dict()
@@ -438,6 +452,7 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                 if not found:
                     # Add new entry
                     if IsKnownLicense(license):
+                        print("\tAdding known original license '" + license + "'...")
                         component["licenses"].append(
                             # {"license": {"id": license, "acknowledgement": "declared"}}
                             {
@@ -447,6 +462,7 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                             }
                         )
                     else:
+                        print("\tAdding original license '" + license + "'...")
                         component["licenses"].append(
                             # {"license": {"name": license, "acknowledgement": "declared"}}
                             {
@@ -483,6 +499,9 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                 if not found:
                     # Add new entry
                     if IsKnownLicense(license):
+                        print(
+                            "\tAdding known distribution license '" + license + "'..."
+                        )
                         component["licenses"].append(
                             # {"license": {"id": license, "acknowledgement": "concluded"}}
                             {
@@ -492,6 +511,7 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                             }
                         )
                     else:
+                        print("\tAdding distribution license '" + license + "'...")
                         component["licenses"].append(
                             # {"license": {"name": license, "acknowledgement": "concluded"}}
                             {
@@ -510,13 +530,13 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
 
             if not has_effective_license:
                 effective_license = enrich_component.effective_license
-                if len(effective_license) == 0:
+                if len(effective_license) == 0 and len(distribution_licenses) > 0:
                     # Fallback
                     effective_license = distribution_licenses[0]
 
                 if len(effective_license) > 0:
                     print(
-                        "Adding effective license to '"
+                        "\tAdding effective license to '"
                         + enrich_component.bom_ref
                         + "'..."
                     )
@@ -535,7 +555,7 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                         has_filename = True
                 if not has_filename:
                     print(
-                        "Adding filename '"
+                        "\tAdding filename '"
                         + enrich_component.filename_actual
                         + "' to '"
                         + enrich_component.bom_ref
@@ -570,7 +590,7 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
                 and len(enrich_component.filename_actual) > 0
             ):
                 print(
-                    "Adding deployable hash of file '"
+                    "\tAdding deployable hash of file '"
                     + enrich_component.filename_actual
                     + "' to '"
                     + enrich_component.bom_ref
@@ -600,7 +620,9 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
             # Set executable property
             try:
                 print(
-                    "Setting '" + enrich_component.bom_ref + "' executable property..."
+                    "\tSetting '"
+                    + enrich_component.bom_ref
+                    + "' executable property..."
                 )
                 if enrich_component.is_executable is True:
                     component["properties"].append(
@@ -615,7 +637,9 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
 
             # Set archive property
             try:
-                print("Setting '" + enrich_component.bom_ref + "' archive property...")
+                print(
+                    "\tSetting '" + enrich_component.bom_ref + "' archive property..."
+                )
                 if enrich_component.is_archive is True:
                     component["properties"].append(
                         {"name": "bsi:component:archive", "value": "archive"}
@@ -630,7 +654,9 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
             # Set structured property
             try:
                 print(
-                    "Setting '" + enrich_component.bom_ref + "' structured property..."
+                    "\tSetting '"
+                    + enrich_component.bom_ref
+                    + "' structured property..."
                 )
                 if enrich_component.is_structured is True:
                     component["properties"].append(
@@ -649,6 +675,7 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
 
 def FindBomRefsForPURL(edb: EnrichtmentDataBase, sbom_json: dict):
     """Gets the bom-refs via the PURL if the bom-ref is not defined in the enrichment file"""
+    print("Matching PURLs to bom-refs...")
     for edbcomp in edb.components:
         if len(edbcomp.bom_ref) == 0 and "components" in sbom_json:
             for component in sbom_json["components"]:
@@ -659,7 +686,7 @@ def FindBomRefsForPURL(edb: EnrichtmentDataBase, sbom_json: dict):
                 ):
                     edbcomp.bom_ref = component["bom-ref"]
                     print(
-                        "Found bom-ref '"
+                        "\tFound bom-ref '"
                         + edbcomp.bom_ref
                         + "' for purl '"
                         + edbcomp.purl
@@ -677,7 +704,7 @@ def FindBomRefsForPURL(edb: EnrichtmentDataBase, sbom_json: dict):
                 ):
                     edbcomp.bom_ref = component["bom-ref"]
                     print(
-                        "Found bom-ref '"
+                        "\tFound bom-ref '"
                         + edbcomp.bom_ref
                         + "' for purl '"
                         + edbcomp.purl
@@ -838,7 +865,7 @@ edb.ReadFromFile(enrichment_file)
 ###############################################################################
 # Read SBOM
 ###############################################################################
-print("Reading SBOM from " + sbom_file_in)
+print("Reading SBOM from '" + sbom_file_in + "'...")
 with open(sbom_file_in, encoding="utf-8") as f:
     sbom_json = json.load(f)
 
@@ -871,14 +898,16 @@ if "components" in sbom_json:
 if "metadata" in sbom_json and "component" in sbom_json["metadata"]:
     component = sbom_json["metadata"]["component"]
     EnrichComponent(edb, component)
+else:
+    print("WARNING: Target component not found in SBOM (metadata -> component)")
 
 ###############################################################################
 # Enrich compositions - describes the completeness of dependencies
 ###############################################################################
+print("Adding compositions...")
 main_component_ref = sbom_json["metadata"]["component"]["bom-ref"]
 sbom_json["compositions"] = list()
 # All components are in the dependencies list, create composition entries for each
-print("Adding compositions...")
 for c in sbom_json["dependencies"]:
     # According to BSI the composition must either contain composition XOR assembly
     assemblies = {"ref": c["ref"], "aggregate": "unknown", "assemblies": []}
@@ -906,7 +935,7 @@ for c in sbom_json["dependencies"]:
 ###############################################################################
 # Export result
 ###############################################################################
-print("Writing SBOM to " + sbom_file_out + "...")
+print("Writing SBOM to '" + sbom_file_out + "'...")
 with open(sbom_file_out, "w", encoding="utf-8") as f:
     f.write(json.dumps(sbom_json, indent=2))
 
