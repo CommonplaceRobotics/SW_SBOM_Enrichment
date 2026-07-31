@@ -93,7 +93,7 @@ Einträge im Array ```components``` erweitern die Komponenten in der SBOM um zus
 
 Einträge:
 * ```bom-ref```: Anfang der Komponenten-ID in der SBOM. Wenn eine ID in der SBOM mit der hier angegebenen ID anfängt wird die Komponente mit den folgenden Informationen erweitert.
-* ```purl```: Kann alternativ zur bom-ref angegeben werden. Hierüber kann auch das eigentliche Target erkannt werden.
+* ```purl```: Kann alternativ zur bom-ref angegeben werden. Hierüber kann auch das eigentliche Target erkannt werden. Der PURL-Eintrag wird mit dem Anfang der PURLs der Komponenten verglichen und die bom-ref der ersten gefundenen Komponente übernommen. Wenn der Eintrag mit einem '*' endet wird der Eintrag für alle gefundenen Komponenten dupliziert, so können z.B. ähnlich benannte Bibliotheken mit einem Eintrag zusammengefasst werden (Achtung bei Angabe eines Dateinamen!).
 * ```creator```: E-Mail-Adresse oder Webseite des Autors der Komponente
 * ```filename```: Dateiname oder Array alternativer Dateinamen der Binärdatei der Komponente, falls vorhanden. Wenn die Datei nicht lokal gefunden werden kann wird versucht den Pfad aus \<CMake build directory\>/build.ninja zu lesen, dabei werden die Endungen .a, .so, .lib und .exe versucht.
 * ```original_licenses```: Die vom Hersteller der Komponente festgelegten Lizenzen.

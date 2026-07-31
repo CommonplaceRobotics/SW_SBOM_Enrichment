@@ -1,4 +1,5 @@
 import argparse
+import copy
 import json
 import hashlib
 import os
@@ -676,40 +677,97 @@ def EnrichComponent(edb: EnrichtmentDataBase, component: dict):
 def FindBomRefsForPURL(edb: EnrichtmentDataBase, sbom_json: dict):
     """Gets the bom-refs via the PURL if the bom-ref is not defined in the enrichment file"""
     print("Matching PURLs to bom-refs...")
-    for edbcomp in edb.components:
-        if len(edbcomp.bom_ref) == 0 and "components" in sbom_json:
-            for component in sbom_json["components"]:
-                if (
-                    "bom-ref" in component
-                    and "purl" in component
-                    and component["purl"].startswith(edbcomp.purl)
-                ):
-                    edbcomp.bom_ref = component["bom-ref"]
-                    print(
-                        "\tFound bom-ref '"
-                        + edbcomp.bom_ref
-                        + "' for purl '"
-                        + edbcomp.purl
-                        + "'"
-                    )
-                    break
 
-        if len(edbcomp.bom_ref) == 0:
+    # Wildcards will be removed later
+    wildcards = list()
+
+    for edbcomp in edb.components:
+        # if the bom-ref is not set but a PURL
+        if len(edbcomp.bom_ref) == 0 and len(edbcomp.purl) > 0:
+            if str.endswith(edbcomp.purl, "*"):
+                wildcard = True
+                purl = edbcomp.purl[:-1]
+            else:
+                wildcard = False
+                purl = edbcomp.purl
+
+            # update database entry or create new ones
+            if "components" in sbom_json:
+                for component in sbom_json["components"]:
+                    if (
+                        "bom-ref" in component
+                        and "purl" in component
+                        and component["purl"].startswith(purl)
+                    ):
+                        if wildcard:
+                            # prüfen, ob es zu der bom-ref schon einen Eintrag gibt
+                            exists = False
+                            for edbcomp2 in edb.components:
+                                if edbcomp2.bom_ref == component["bom-ref"]:
+                                    exists = True
+                                    break
+                            if not exists:
+                                print(
+                                    "\tFound bom-ref '"
+                                    + edbcomp.bom_ref
+                                    + "' for purl '"
+                                    + edbcomp.purl
+                                    + "', duplicating entry..."
+                                )
+                                new_entry = copy.deepcopy(edbcomp)
+                                new_entry.bom_ref = component["bom-ref"]
+                                edb.components.append(new_entry)
+                        else:
+                            print(
+                                "\tFound bom-ref '"
+                                + edbcomp.bom_ref
+                                + "' for purl '"
+                                + edbcomp.purl
+                                + "', updating entry..."
+                            )
+                            edbcomp.bom_ref = component["bom-ref"]
+                            break
+
+            # do the same for the SBOM's main component
             if "metadata" in sbom_json and "component" in sbom_json["metadata"]:
                 component = sbom_json["metadata"]["component"]
                 if (
                     "bom-ref" in component
                     and "purl" in component
-                    and component["purl"].startswith(edbcomp.purl)
+                    and component["purl"].startswith(purl)
                 ):
-                    edbcomp.bom_ref = component["bom-ref"]
-                    print(
-                        "\tFound bom-ref '"
-                        + edbcomp.bom_ref
-                        + "' for purl '"
-                        + edbcomp.purl
-                        + "'"
-                    )
+                    if wildcard:
+                        # prüfen, ob es zu der bom-ref schon einen Eintrag gibt
+                        exists = False
+                        for edbcomp2 in edb.components:
+                            if edbcomp2.bom_ref == component["bom-ref"]:
+                                exists = True
+                                break
+                        if not exists:
+                            print(
+                                "\tFound bom-ref '"
+                                + edbcomp.bom_ref
+                                + "' for purl '"
+                                + edbcomp.purl
+                                + "', duplicating entry..."
+                            )
+                            new_entry = copy.deepcopy(edbcomp)
+                            new_entry.bom_ref = component["bom-ref"]
+                            edb.components.append(new_entry)
+                    else:
+                        print(
+                            "\tFound bom-ref '"
+                            + edbcomp.bom_ref
+                            + "' for purl '"
+                            + edbcomp.purl
+                            + "', updating entry..."
+                        )
+                        edbcomp.bom_ref = component["bom-ref"]
+                        break
+
+    # Remove wildcard entries
+    for wc in wildcards:
+        edb.components.remove(wc)
 
 
 def RemoveComponents(components: list):
