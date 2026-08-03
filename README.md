@@ -39,7 +39,7 @@ Das Skript kann auch als Github-Action aufgerufen werden. Anforderung dazu ist, 
 
 ```yaml
 - name: Final SBOM enrichment
-  uses: CommonplaceRobotics/SW_SBOM_Enrichment@v1
+  uses: CommonplaceRobotics/Action_SBOM_Enrichment@v1
   with:
 	database: .github/workflows/sbom_enrichment_db.json
 	sbom: sbom.cdx.json
